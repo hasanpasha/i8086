@@ -2,21 +2,21 @@ pub const std_options: std.Options = .{
     .log_level = .debug,
 };
 
-pub fn main() !void {
-    var args = std.process.args();
+pub fn main(init: std.process.Init) !void {
+    var args = init.minimal.args.iterate();
 
     const program = args.next() orelse unreachable;
 
     const binary_path = args.next() orelse
         std.debug.panic("usage: {s} <FILE>", .{program});
 
+    std.log.info("emulating {s}", .{binary_path});
+
     var ram: RAM = .{};
-    try ram.loadAt(binary_path, 0);
+    try ram.loadAt(init.io, binary_path, 0);
 
     var chip: Chip = .init(ram.memoryBus());
-    while (!chip.halted) {
-        chip.step();
-    }
+    chip.spin();
 }
 
 const std = @import("std");

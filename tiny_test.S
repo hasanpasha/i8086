@@ -17,6 +17,8 @@ mov ax, 0xff
 mov bx, 0x1
 add ax, bx
 
+; jmp [value]
+
 ; mov al, 0x1
 ; mov bl, 0x1
 ; add al, bl

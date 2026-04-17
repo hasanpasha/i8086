@@ -1,7 +1,7 @@
 .{
-    .name = .i8086_emu,
+    .name = .i8086,
     .version = "0.0.1",
-    .minimum_zig_version = "0.15.2",
+    .minimum_zig_version = "0.16.0",
     .paths = .{""},
-    .fingerprint = 0x384804b8da8239b,
+    .fingerprint = 0x9bd1fe9d847cb926,
 }

@@ -21,45 +21,62 @@ halted: bool = false,
 
 pub const Flags = packed struct(u16) {
     /// Carry
-    c: u1,
+    c: bool,
 
     _1: u1,
 
     /// parity
-    p: u1,
+    p: bool,
 
-    _2: u1,
+    _2: bool,
 
     /// auxiliary carry
-    a: u1,
+    a: bool,
 
     _3: u1,
 
     /// zero
-    z: u1,
+    z: bool,
 
     /// sign
-    s: u1,
+    s: bool, //0b11000001
 
     /// trap
-    t: u1,
+    t: bool,
 
     /// interrupt enable/disable
-    i: u1,
+    i: bool,
 
     /// direction
-    d: u1,
+    d: bool,
 
     /// overflow
-    o: u1,
+    o: bool,
 
     _4: u4,
+
+    pub fn getLow(self: Flags) u8 {
+        return @truncate(@as(u16, @bitCast(self)) & 0xFF);
+    }
+
+    pub fn setLow(self: *Flags, val: u8) void {
+        std.log.debug("before: {f}", .{self.*});
+
+        const raw_p: *[2]u8 = @ptrCast(@alignCast(self));
+        raw_p[0] = val;
+
+        std.log.debug("flags: {f}", .{self.*});
+    }
 
     pub fn format(self: Flags, writer: *Writer) Writer.Error!void {
         const fields = std.meta.fields(Flags);
         inline for (fields) |field| {
             if (field.name[0] == '_') continue;
-            try writer.print("{s}({}) ", .{ field.name, @field(self, field.name) });
+            if (@field(self, field.name)) {
+                try writer.print("{c}F ", .{std.ascii.toUpper(field.name[0])});
+            } else {
+                try writer.print("{c}f ", .{std.ascii.toLower(field.name[0])});
+            }
         }
     }
 };
@@ -130,7 +147,7 @@ fn linearAddr(self: *const Self, seg: Register, effective_addr: u16) u20 {
 }
 
 pub fn readMem(self: *const Self, comptime size: Size, addr: u20) size.T() {
-    return switch (size) {
+    const val: size.T() = switch (size) {
         .b => self.bus.read(addr),
         .w => val: {
             const lo = self.bus.read(addr);
@@ -138,9 +155,14 @@ pub fn readMem(self: *const Self, comptime size: Size, addr: u20) size.T() {
             break :val @as(u16, hi) << 8 | lo;
         },
     };
+
+    std.log.debug("[{X:0>4}] -> {X:0>" ++ (if (size == .b) "2" else "4") ++ "}", .{ addr, val });
+    return val;
 }
 
 pub fn writeMem(self: *Self, comptime size: Size, addr: u20, val: size.T()) void {
+    std.log.debug("[{X:0>4}] <- {X:0>" ++ (if (size == .b) "2" else "4") ++ "}", .{ addr, val });
+
     self.bus.write(addr, @truncate(val));
     if (size == .w)
         self.bus.write(addr +% 1, @truncate(val >> 8));
@@ -195,46 +217,8 @@ fn setOperand(self: *Self, comptime size: Size, operand: Operand, val: size.T())
     }
 }
 
-pub const ALUFlags = packed struct(u16) {
-    /// Carry
-    c: ?u1 = null,
-
-    /// parity
-    p: ?u1 = null,
-
-    /// auxiliary carry
-    a: ?u1 = null,
-
-    /// zero
-    z: ?u1 = null,
-
-    /// sign
-    s: ?u1 = null,
-
-    /// trap
-    t: ?u1 = null,
-
-    /// interrupt enable/disable
-    i: ?u1 = null,
-
-    /// direction
-    d: ?u1 = null,
-
-    /// overflow
-    o: ?u1 = null,
-
-    _: u7 = 0,
-};
-
-// TODO: handle flags
-fn add(a: anytype, b: @TypeOf(a)) struct { @TypeOf(a), ALUFlags } {
-    return .{ a +% b, .{} };
-}
-
-// const BinaryExecutor = fn (self: *Self, a: anytype, b: anytype) @TypeOf(a);
-
 fn execBinary(self: *Self, bin: Instruction.Binary, comptime executor: anytype) void {
-    const new_flags: ALUFlags = switch (bin.op1.size()) {
+    const new_flags: alu.Flags = switch (bin.op1.size()) {
         .b => flags: {
             const result, const new_flags = executor(self.getOperand(.b, bin.op1), self.getOperand(.b, bin.op2));
             self.setOperand(.b, bin.op1, result);
@@ -246,30 +230,114 @@ fn execBinary(self: *Self, bin: Instruction.Binary, comptime executor: anytype) 
             break :flags new_flags;
         },
     };
-    _ = new_flags;
+
+    std.log.debug("old_flags: {f}", .{self.flags});
+    defer std.log.debug("new_flags: {f}", .{self.flags});
+
+    inline for (std.meta.fields(alu.Flags)) |field| {
+        if (@field(new_flags, field.name)) |new_value| {
+            @field(self.flags, field.name) = new_value;
+        }
+    }
+}
+
+fn jmpRelative(self: *Self, rel: i8) void {
+    self.ip = @bitCast(@as(i16, @bitCast(self.ip)) + rel);
 }
 
 fn execute(self: *Self, instr: Instruction) void {
     switch (instr) {
         .hlt => self.halted = true,
-        .add => |bin| self.execBinary(bin, add),
+        .add => |bin| self.execBinary(bin, alu.add),
+        .sub => |bin| self.execBinary(bin, alu.sub),
+        .and_ => |bin| self.execBinary(bin, alu.anD),
+        .or_ => |bin| self.execBinary(bin, alu.oR),
         .mov => |mov| switch (mov.dst.size()) {
             .b => self.setOperand(.b, mov.dst, self.getOperand(.b, mov.src)),
             .w => self.setOperand(.w, mov.dst, self.getOperand(.w, mov.src)),
         },
+        .movs => |size| {
+            const si: u16 = self.getReg(.w, .si);
+            const di: u16 = self.getReg(.w, .di);
+            const src_addr = self.linearAddr(.ds, si);
+            const dst_addr = self.linearAddr(.es, di);
+
+            const offset: i3 = switch (size) {
+                .b => offset: {
+                    self.writeMem(.b, dst_addr, self.readMem(.b, src_addr));
+                    break :offset if (self.flags.d) -1 else 1;
+                },
+                .w => offset: {
+                    self.writeMem(.w, dst_addr, self.readMem(.w, src_addr));
+                    break :offset if (self.flags.d) -2 else 2;
+                },
+            };
+
+            const new_si: u16 = @bitCast(@as(i16, @bitCast(si)) +% offset);
+            const new_di: u16 = @bitCast(@as(i16, @bitCast(di)) +% offset);
+
+            std.log.debug("si: {X:0>4} -> {X:0>4}", .{ si, new_si });
+            std.log.debug("di: {X:0>4} -> {X:0>4}", .{ di, new_di });
+
+            self.setReg(.w, .si, new_si);
+            self.setReg(.w, .di, new_di);
+        },
         .jmp => |jmp| switch (jmp) {
-            .disp => |rel| self.ip = @bitCast(@as(i16, @bitCast(self.ip)) + rel),
+            .disp => |rel| self.jmpRelative(rel),
             .disp16 => |val| self.ip +%= val,
         },
+        .jc => |cond_jmp| {
+            const should_jmp = switch (cond_jmp.cond) {
+                .o => self.flags.o,
+                .no => !self.flags.o,
+                .b => self.flags.c,
+                .ae => !self.flags.c,
+                .e => self.flags.z,
+                .ne => !self.flags.z,
+                .be => self.flags.c or self.flags.z,
+                .a => !self.flags.c and !self.flags.z,
+                .s => self.flags.s,
+                .ns => !self.flags.s,
+                .np => !self.flags.p,
+                .p => self.flags.p,
+                .l => self.flags.s != self.flags.o,
+                .ge => self.flags.s == self.flags.o,
+                .le => self.flags.z or self.flags.s != self.flags.o,
+                .g => !self.flags.z and self.flags.s == self.flags.o,
+            };
+
+            if (should_jmp) self.jmpRelative(cond_jmp.rel);
+        },
+        // clear direction flag
+        .cld => self.flags.d = false,
+        // set direction flag
+        .std => self.flags.d = true,
+        .inc => |op| self.execBinary(.{ .op1 = op, .op2 = .{ .imm16 = 1 } }, alu.inc),
+        .dec => |op| self.execBinary(.{ .op1 = op, .op2 = .{ .imm16 = 1 } }, alu.dec),
+        .cmp => |bin| self.execBinary(bin, alu.cmp),
+        .sahf => self.flags.setLow(self.getReg(.b, .al)),
+        .lahf => self.setReg(.b, .al, @truncate(@as(u16, @bitCast(self.flags)) & 0xFF)),
     }
 }
 
-pub fn step(self: *Self) void {
+pub fn fetchInstr(self: *Self) Instruction {
     const size, const instr = decoder.decode(self);
-    std.log.debug("{f}", .{instr});
+    self.ip +%= size;
 
-    self.ip += size;
+    return instr;
+}
+
+pub fn step(self: *Self) void {
+    const instr = self.fetchInstr();
+    std.log.info("{f}", .{instr});
+
     self.execute(instr);
+}
+
+pub fn spin(self: *Self) void {
+    while (!self.halted) {
+        self.step();
+    }
 }
 
 const std = @import("std");
@@ -280,7 +348,8 @@ const root = @import("root.zig");
 const MemoryBus = root.MemoryBus;
 
 const decoder = root.decoder;
+const alu = root.alu;
 const Instruction = root.Instruction;
 const Operand = Instruction.Operand;
-const Register = Operand.Register;
+const Register = Instruction.Register;
 const Size = root.Size;
