@@ -10,7 +10,7 @@ pub fn main(init: std.process.Init) !void {
     const binary_path = args.next() orelse
         std.debug.panic("usage: {s} <FILE>", .{program});
 
-    std.log.info("emulating {s}", .{binary_path});
+    log.info("emulating {s}", .{binary_path});
 
     var ram: RAM = .{};
     try ram.loadAt(init.io, binary_path, 0);
@@ -20,6 +20,7 @@ pub fn main(init: std.process.Init) !void {
 }
 
 const std = @import("std");
+const log = std.log.scoped(.main);
 const I8086 = @import("I8086");
 const Chip = I8086.Chip;
 const RAM = I8086.RAM;

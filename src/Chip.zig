@@ -60,22 +60,21 @@ pub const Flags = packed struct(u16) {
     }
 
     pub fn setLow(self: *Flags, val: u8) void {
-        std.log.debug("before: {f}", .{self.*});
+        log.debug("old_flags: {f}", .{self.*});
+        defer log.debug("new_flags: {f}", .{self.*});
 
         const raw_p: *[2]u8 = @ptrCast(@alignCast(self));
         raw_p[0] = val;
-
-        std.log.debug("flags: {f}", .{self.*});
     }
 
     pub fn format(self: Flags, writer: *Writer) Writer.Error!void {
-        const fields = std.meta.fields(Flags);
-        inline for (fields) |field| {
+        inline for (std.meta.fields(Flags)) |field| {
             if (field.name[0] == '_') continue;
+
             if (@field(self, field.name)) {
                 try writer.print("{c}F ", .{std.ascii.toUpper(field.name[0])});
             } else {
-                try writer.print("{c}f ", .{std.ascii.toLower(field.name[0])});
+                try writer.print("{c}f ", .{field.name[0]});
             }
         }
     }
@@ -121,12 +120,12 @@ pub fn getReg(self: *const Self, comptime size: Size, reg: Register) size.T() {
         .w => reg_whole.*,
     };
 
-    std.log.debug("{f} -> {X}", .{ reg, val });
+    log.debug("{f} -> {X}", .{ reg, val });
     return val;
 }
 
 pub fn setReg(self: *Self, comptime size: Size, reg: Register, val: size.T()) void {
-    std.log.debug("{f} <- {X}", .{ reg, val });
+    log.debug("{f} <- {X}", .{ reg, val });
 
     const reg_whole: *u16 = &self.registers[reg.idx()];
 
@@ -156,12 +155,12 @@ pub fn readMem(self: *const Self, comptime size: Size, addr: u20) size.T() {
         },
     };
 
-    std.log.debug("[{X:0>4}] -> {X:0>" ++ (if (size == .b) "2" else "4") ++ "}", .{ addr, val });
+    log.debug("[{X:0>4}] -> {X:0>" ++ (if (size == .b) "2" else "4") ++ "}", .{ addr, val });
     return val;
 }
 
 pub fn writeMem(self: *Self, comptime size: Size, addr: u20, val: size.T()) void {
-    std.log.debug("[{X:0>4}] <- {X:0>" ++ (if (size == .b) "2" else "4") ++ "}", .{ addr, val });
+    log.debug("[{X:0>4}] <- {X:0>" ++ (if (size == .b) "2" else "4") ++ "}", .{ addr, val });
 
     self.bus.write(addr, @truncate(val));
     if (size == .w)
@@ -231,8 +230,8 @@ fn execBinary(self: *Self, bin: Instruction.Binary, comptime executor: anytype) 
         },
     };
 
-    std.log.debug("old_flags: {f}", .{self.flags});
-    defer std.log.debug("new_flags: {f}", .{self.flags});
+    log.debug("old_flags: {f}", .{self.flags});
+    defer log.debug("new_flags: {f}", .{self.flags});
 
     inline for (std.meta.fields(alu.Flags)) |field| {
         if (@field(new_flags, field.name)) |new_value| {
@@ -276,8 +275,8 @@ fn execute(self: *Self, instr: Instruction) void {
             const new_si: u16 = @bitCast(@as(i16, @bitCast(si)) +% offset);
             const new_di: u16 = @bitCast(@as(i16, @bitCast(di)) +% offset);
 
-            std.log.debug("si: {X:0>4} -> {X:0>4}", .{ si, new_si });
-            std.log.debug("di: {X:0>4} -> {X:0>4}", .{ di, new_di });
+            log.debug("si: {X:0>4} -> {X:0>4}", .{ si, new_si });
+            log.debug("di: {X:0>4} -> {X:0>4}", .{ di, new_di });
 
             self.setReg(.w, .si, new_si);
             self.setReg(.w, .di, new_di);
@@ -329,7 +328,7 @@ pub fn fetchInstr(self: *Self) Instruction {
 
 pub fn step(self: *Self) void {
     const instr = self.fetchInstr();
-    std.log.info("{f}", .{instr});
+    log.info("{f}", .{instr});
 
     self.execute(instr);
 }
@@ -339,6 +338,8 @@ pub fn spin(self: *Self) void {
         self.step();
     }
 }
+
+const log = std.log.scoped(.chip);
 
 const std = @import("std");
 const Writer = std.Io.Writer;
