@@ -76,10 +76,21 @@ pub const Flags = packed union(u16) {
     }
 
     pub fn setLow(self: *Flags, val: u8) void {
-        log.debug("old_flags: {f}", .{self.*});
-        defer log.debug("new_flags: {f}", .{self.*});
+        log.debug("old_flags: {f}", .{self});
+        defer log.debug("new_flags: {f}", .{self});
 
-        self.raw = (self.raw & 0xFF) | val;
+        self.raw = (self.raw & 0xFF00) | val;
+    }
+
+    pub fn updateFromALUFlags(self: *Flags, alu_flags: alu.Flags) void {
+        log.debug("old_flags: {f}", .{self});
+        defer log.debug("new_flags: {f}", .{self});
+
+        inline for (std.meta.fields(alu.Flags)) |field| {
+            if (@field(alu_flags, field.name)) |new_value| {
+                @field(self.v, field.name) = new_value;
+            }
+        }
     }
 
     pub fn format(self: @This(), writer: *Writer) Writer.Error!void {
@@ -103,11 +114,11 @@ pub fn init(bus: MemoryBus) Self {
 }
 
 pub fn format(self: Self, writer: *Writer) Writer.Error!void {
-    try writer.print("IP:0x{X} flags:{f} ", .{ self.ip, self.flags });
+    try writer.print("IP:{X:0>4} flags:{f} ", .{ self.ip, self.flags });
     const fields = std.meta.fields(Register);
     inline for (fields, 0..) |field, idx| {
         const whole = self.registers[idx];
-        try writer.print("{s}:0x{X:0>4}", .{ field.name, whole });
+        try writer.print("{s}:{X:0>4}", .{ field.name, whole });
         if (idx < fields.len) try writer.writeByte(' ');
     }
 }
@@ -223,27 +234,19 @@ fn setOperand(self: *Self, comptime size: Size, operand: Operand, val: size.T())
     }
 }
 
+fn execBinaryTyped(self: *Self, comptime size: Size, bin: Instruction.Binary, comptime executor: anytype) void {
+    const op1 = self.getOperand(size, bin.op1);
+    const op2 = self.getOperand(size, bin.op2);
+
+    const result, const alu_flags = executor(op1, op2);
+    self.setOperand(size, bin.op1, result);
+    self.flags.updateFromALUFlags(alu_flags);
+}
+
 fn execBinary(self: *Self, bin: Instruction.Binary, comptime executor: anytype) void {
-    const new_flags: alu.Flags = switch (bin.op1.size()) {
-        .b => flags: {
-            const result, const new_flags = executor(self.getOperand(.b, bin.op1), self.getOperand(.b, bin.op2));
-            self.setOperand(.b, bin.op1, result);
-            break :flags new_flags;
-        },
-        .w => flags: {
-            const result, const new_flags = executor(self.getOperand(.w, bin.op1), self.getOperand(.w, bin.op2));
-            self.setOperand(.w, bin.op1, result);
-            break :flags new_flags;
-        },
-    };
-
-    log.debug("old_flags: {f}", .{self.flags});
-    defer log.debug("new_flags: {f}", .{self.flags});
-
-    inline for (std.meta.fields(alu.Flags)) |field| {
-        if (@field(new_flags, field.name)) |new_value| {
-            @field(self.flags.v, field.name) = new_value;
-        }
+    switch (bin.size()) {
+        .b => self.execBinaryTyped(.b, bin, executor),
+        .w => self.execBinaryTyped(.w, bin, executor),
     }
 }
 

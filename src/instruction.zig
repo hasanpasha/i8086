@@ -239,6 +239,10 @@ pub const Instruction = union(enum) {
         pub fn format(self: @This(), writer: *Writer) Writer.Error!void {
             try writer.print("{t} {f}, {f}", .{ self.op1.size(), self.op1, self.op2 });
         }
+
+        pub fn size(self: @This()) Size {
+            return self.op1.size();
+        }
     };
 
     pub const Jmp = union(enum) {
