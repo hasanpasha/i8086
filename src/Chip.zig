@@ -19,64 +19,71 @@ halted: bool = false,
 // /// user custom data pointer
 // userdata: ?*anyopaque,
 
-pub const Flags = packed struct(u16) {
-    /// Carry
-    c: bool,
+pub const Flags = packed union(u16) {
+    raw: u16,
 
-    _1: u1,
+    v: packed struct(u16) {
+        /// Carry
+        c: bool,
 
-    /// parity
-    p: bool,
+        _1: u1,
 
-    _2: bool,
+        /// parity
+        p: bool,
 
-    /// auxiliary carry
-    a: bool,
+        _2: bool,
 
-    _3: u1,
+        /// auxiliary carry
+        a: bool,
 
-    /// zero
-    z: bool,
+        _3: u1,
 
-    /// sign
-    s: bool, //0b11000001
+        /// zero
+        z: bool,
 
-    /// trap
-    t: bool,
+        /// sign
+        s: bool,
 
-    /// interrupt enable/disable
-    i: bool,
+        /// trap
+        t: bool,
 
-    /// direction
-    d: bool,
+        /// interrupt enable/disable
+        i: bool,
 
-    /// overflow
-    o: bool,
+        /// direction
+        d: bool,
 
-    _4: u4,
+        /// overflow
+        o: bool,
+
+        _4: u4,
+
+        pub fn format(self: @This(), writer: *Writer) Writer.Error!void {
+            inline for (std.meta.fields(@This())) |field| {
+                if (field.name[0] == '_') continue;
+
+                if (@field(self, field.name)) {
+                    try writer.print("{c}F ", .{std.ascii.toUpper(field.name[0])});
+                } else {
+                    try writer.print("{c}f ", .{field.name[0]});
+                }
+            }
+        }
+    },
 
     pub fn getLow(self: Flags) u8 {
-        return @truncate(@as(u16, @bitCast(self)) & 0xFF);
+        return @truncate(self.raw & 0xFF);
     }
 
     pub fn setLow(self: *Flags, val: u8) void {
         log.debug("old_flags: {f}", .{self.*});
         defer log.debug("new_flags: {f}", .{self.*});
 
-        const raw_p: *[2]u8 = @ptrCast(@alignCast(self));
-        raw_p[0] = val;
+        self.raw = (self.raw & 0xFF) | val;
     }
 
-    pub fn format(self: Flags, writer: *Writer) Writer.Error!void {
-        inline for (std.meta.fields(Flags)) |field| {
-            if (field.name[0] == '_') continue;
-
-            if (@field(self, field.name)) {
-                try writer.print("{c}F ", .{std.ascii.toUpper(field.name[0])});
-            } else {
-                try writer.print("{c}f ", .{field.name[0]});
-            }
-        }
+    pub fn format(self: @This(), writer: *Writer) Writer.Error!void {
+        try writer.print("{f}", .{self.v});
     }
 };
 
@@ -235,7 +242,7 @@ fn execBinary(self: *Self, bin: Instruction.Binary, comptime executor: anytype) 
 
     inline for (std.meta.fields(alu.Flags)) |field| {
         if (@field(new_flags, field.name)) |new_value| {
-            @field(self.flags, field.name) = new_value;
+            @field(self.flags.v, field.name) = new_value;
         }
     }
 }
@@ -251,6 +258,7 @@ fn execute(self: *Self, instr: Instruction) void {
         .sub => |bin| self.execBinary(bin, alu.sub),
         .and_ => |bin| self.execBinary(bin, alu.anD),
         .or_ => |bin| self.execBinary(bin, alu.oR),
+        .cmp => |bin| self.execBinary(bin, alu.cmp),
         .mov => |mov| switch (mov.dst.size()) {
             .b => self.setOperand(.b, mov.dst, self.getOperand(.b, mov.src)),
             .w => self.setOperand(.w, mov.dst, self.getOperand(.w, mov.src)),
@@ -264,11 +272,11 @@ fn execute(self: *Self, instr: Instruction) void {
             const offset: i3 = switch (size) {
                 .b => offset: {
                     self.writeMem(.b, dst_addr, self.readMem(.b, src_addr));
-                    break :offset if (self.flags.d) -1 else 1;
+                    break :offset if (self.flags.v.d) -1 else 1;
                 },
                 .w => offset: {
                     self.writeMem(.w, dst_addr, self.readMem(.w, src_addr));
-                    break :offset if (self.flags.d) -2 else 2;
+                    break :offset if (self.flags.v.d) -2 else 2;
                 },
             };
 
@@ -287,35 +295,40 @@ fn execute(self: *Self, instr: Instruction) void {
         },
         .jc => |cond_jmp| {
             const should_jmp = switch (cond_jmp.cond) {
-                .o => self.flags.o,
-                .no => !self.flags.o,
-                .b => self.flags.c,
-                .ae => !self.flags.c,
-                .e => self.flags.z,
-                .ne => !self.flags.z,
-                .be => self.flags.c or self.flags.z,
-                .a => !self.flags.c and !self.flags.z,
-                .s => self.flags.s,
-                .ns => !self.flags.s,
-                .np => !self.flags.p,
-                .p => self.flags.p,
-                .l => self.flags.s != self.flags.o,
-                .ge => self.flags.s == self.flags.o,
-                .le => self.flags.z or self.flags.s != self.flags.o,
-                .g => !self.flags.z and self.flags.s == self.flags.o,
+                .o => self.flags.v.o,
+                .no => !self.flags.v.o,
+                .b => self.flags.v.c,
+                .ae => !self.flags.v.c,
+                .e => self.flags.v.z,
+                .ne => !self.flags.v.z,
+                .be => self.flags.v.c or self.flags.v.z,
+                .a => !self.flags.v.c and !self.flags.v.z,
+                .s => self.flags.v.s,
+                .ns => !self.flags.v.s,
+                .np => !self.flags.v.p,
+                .p => self.flags.v.p,
+                .l => self.flags.v.s != self.flags.v.o,
+                .ge => self.flags.v.s == self.flags.v.o,
+                .le => self.flags.v.z or self.flags.v.s != self.flags.v.o,
+                .g => !self.flags.v.z and self.flags.v.s == self.flags.v.o,
             };
 
             if (should_jmp) self.jmpRelative(cond_jmp.rel);
         },
         // clear direction flag
-        .cld => self.flags.d = false,
+        .cld => self.flags.v.d = false,
         // set direction flag
-        .std => self.flags.d = true,
-        .inc => |op| self.execBinary(.{ .op1 = op, .op2 = .{ .imm16 = 1 } }, alu.inc),
-        .dec => |op| self.execBinary(.{ .op1 = op, .op2 = .{ .imm16 = 1 } }, alu.dec),
-        .cmp => |bin| self.execBinary(bin, alu.cmp),
+        .std => self.flags.v.d = true,
+        .inc => |op| self.execBinary(
+            .{ .op1 = op, .op2 = .{ .imm16 = 1 } },
+            alu.inc,
+        ),
+        .dec => |op| self.execBinary(
+            .{ .op1 = op, .op2 = .{ .imm16 = 1 } },
+            alu.dec,
+        ),
         .sahf => self.flags.setLow(self.getReg(.b, .al)),
-        .lahf => self.setReg(.b, .al, @truncate(@as(u16, @bitCast(self.flags)) & 0xFF)),
+        .lahf => self.setReg(.b, .al, self.flags.getLow()),
     }
 }
 
