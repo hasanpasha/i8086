@@ -7,7 +7,7 @@ pub fn build(b: *std.Build) void {
     const test_math_exe = b.addExecutable(.{
         .name = "test_math",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("test_math.zig"),
+            .root_source_file = b.path("src/test_math.zig"),
             .target = target,
             .optimize = optimize,
         }),
@@ -16,7 +16,7 @@ pub fn build(b: *std.Build) void {
     b.step("test-math", "test-math").dependOn(&b.addRunArtifact(test_math_exe).step);
 
     const i8086_mod = b.createModule(.{
-        .root_source_file = b.path("root.zig"),
+        .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -24,7 +24,7 @@ pub fn build(b: *std.Build) void {
     const exe = b.addExecutable(.{
         .name = "8086emu",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("main.zig"),
+            .root_source_file = b.path("src/main.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{
@@ -54,10 +54,11 @@ pub fn build(b: *std.Build) void {
 
     const rom_test_step = b.step("rom-test", "run test roms");
     inline for (nasm_files) |asm_name| {
-        const binary_name = asm_name ++ ".bin";
-        const build_bin = b.addSystemCommand(&.{ "nasm", "-f", "bin", asm_name, "-o", binary_name });
+        const asm_path = "asm_src/" ++ asm_name;
+        const bin_path = asm_path ++ ".bin";
+        const build_bin = b.addSystemCommand(&.{ "nasm", "-f", "bin", asm_path, "-o", bin_path });
         const run = b.addRunArtifact(exe);
-        run.addArg(binary_name);
+        run.addArg(bin_path);
         run.step.dependOn(&build_bin.step);
         rom_test_step.dependOn(&run.step);
     }
