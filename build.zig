@@ -49,7 +49,8 @@ pub fn build(b: *std.Build) void {
         // "mov.S",
         // "add.S",
         // "and.S",
-        "or.S",
+        // "or.S",
+        "helloworld.S",
     };
 
     const rom_test_step = b.step("rom-test", "run test roms");

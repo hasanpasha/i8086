@@ -102,6 +102,11 @@ pub fn oR(a: anytype, b: @TypeOf(a)) struct { @TypeOf(a), Flags } {
     return .{ result, computeBitFlags(result) };
 }
 
+pub fn xor(a: anytype, b: @TypeOf(a)) struct { @TypeOf(a), Flags } {
+    const result = a ^ b;
+    return .{ result, computeBitFlags(result) };
+}
+
 const eql = std.testing.expectEqualDeep;
 
 test "add" {

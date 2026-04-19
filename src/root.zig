@@ -1,6 +1,8 @@
 pub const Chip = @import("Chip.zig");
 pub const MemoryBus = @import("MemoryBus.zig");
+pub const MemoryRegion = @import("MemoryRegion.zig");
 pub const RAM = @import("RAM.zig");
+pub const ROM = @import("ROM.zig");
 pub const decoder = @import("decoder.zig");
 pub const alu = @import("alu.zig");
 

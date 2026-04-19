@@ -103,14 +103,22 @@ const Self = @This();
 pub fn init(bus: MemoryBus) Self {
     var self: Self = undefined;
 
-    self.ip = 0;
-
-    self.setReg(.w, .cs, 0);
-    self.setReg(.w, .ds, 0xFF);
-
     self.bus = bus;
 
+    self.reset();
+
     return self;
+}
+
+pub fn reset(self: *Self) void {
+    self.flags.raw = 0;
+
+    self.ip = 0x0000;
+    self.setReg(.w, .cs, 0xFFFF);
+
+    self.setReg(.w, .ds, 0x0000);
+    self.setReg(.w, .ss, 0x0000);
+    self.setReg(.w, .es, 0x0000);
 }
 
 pub fn format(self: Self, writer: *Writer) Writer.Error!void {
@@ -160,7 +168,8 @@ pub fn setReg(self: *Self, comptime size: Size, reg: Register, val: size.T()) vo
 }
 
 fn linearAddr(self: *const Self, seg: Register, effective_addr: u16) u20 {
-    return (@as(u20, self.getReg(.w, seg)) << 4) +% effective_addr;
+    const segment_addr = self.getReg(.w, seg);
+    return (@as(u20, segment_addr) << 4) +% effective_addr;
 }
 
 pub fn readMem(self: *const Self, comptime size: Size, addr: u20) size.T() {
@@ -173,12 +182,12 @@ pub fn readMem(self: *const Self, comptime size: Size, addr: u20) size.T() {
         },
     };
 
-    log.debug("[{X:0>4}] -> {X:0>" ++ (if (size == .b) "2" else "4") ++ "}", .{ addr, val });
+    log.debug("[{X:0>5}] -> {X:0>" ++ (if (size == .b) "2" else "4") ++ "}", .{ addr, val });
     return val;
 }
 
 pub fn writeMem(self: *Self, comptime size: Size, addr: u20, val: size.T()) void {
-    log.debug("[{X:0>4}] <- {X:0>" ++ (if (size == .b) "2" else "4") ++ "}", .{ addr, val });
+    log.debug("[{X:0>5}] <- {X:0>" ++ (if (size == .b) "2" else "4") ++ "}", .{ addr, val });
 
     self.bus.write(addr, @truncate(val));
     if (size == .w)
@@ -254,6 +263,60 @@ fn jmpRelative(self: *Self, rel: i8) void {
     self.ip = @bitCast(@as(i16, @bitCast(self.ip)) + rel);
 }
 
+fn push(self: *Self, comptime size: Size, value: size.T()) void {
+    const sp: u16 = self.getReg(.w, .sp);
+
+    const new_sp = sp -% (if (size == .b) 1 else 2);
+    self.setReg(.w, .sp, new_sp);
+
+    const addr = self.linearAddr(.ss, new_sp);
+    self.writeMem(size, addr, value);
+}
+
+fn pushOperand(self: *Self, op: Operand) void {
+    switch (op.size()) {
+        .b => self.push(.b, self.getOperand(.b, op)),
+        .w => self.push(.w, self.getOperand(.w, op)),
+    }
+}
+
+fn pop(self: *Self, comptime size: Size) size.T() {
+    const sp: u16 = self.getReg(.w, .sp);
+
+    const new_sp = sp +% (if (size == .b) 1 else 2);
+    self.setReg(.w, .sp, new_sp);
+
+    const addr = self.linearAddr(.ss, sp);
+    return self.readMem(size, addr);
+}
+
+fn popOperand(self: *Self, dst: Operand) void {
+    switch (dst.size()) {
+        .b => self.setOperand(.b, dst, self.pop(.b)),
+        .w => self.setOperand(.w, dst, self.pop(.w)),
+    }
+}
+
+fn loadAtSI(self: *Self, comptime size: Size) size.T() {
+    const si = self.getReg(.w, .si);
+
+    const bytes = @sizeOf(size.T());
+    const offset: i3 = if (self.flags.v.d) -bytes else bytes;
+    self.setReg(.w, .si, @bitCast(@as(i16, @bitCast(si)) +% offset));
+
+    return self.readMem(size, self.linearAddr(.ds, si));
+}
+
+fn storeAtDI(self: *Self, comptime size: Size, value: size.T()) void {
+    const di = self.getReg(.w, .di);
+
+    const bytes = @sizeOf(size.T());
+    const offset: i3 = if (self.flags.v.d) -bytes else bytes;
+    self.setReg(.w, .di, @bitCast(@as(i16, @bitCast(di)) +% offset));
+
+    self.writeMem(size, self.linearAddr(.es, di), value);
+}
+
 fn execute(self: *Self, instr: Instruction) void {
     switch (instr) {
         .hlt => self.halted = true,
@@ -261,40 +324,31 @@ fn execute(self: *Self, instr: Instruction) void {
         .sub => |bin| self.execBinary(bin, alu.sub),
         .and_ => |bin| self.execBinary(bin, alu.anD),
         .or_ => |bin| self.execBinary(bin, alu.oR),
+        .xor => |bin| self.execBinary(bin, alu.xor),
         .cmp => |bin| self.execBinary(bin, alu.cmp),
         .mov => |mov| switch (mov.dst.size()) {
             .b => self.setOperand(.b, mov.dst, self.getOperand(.b, mov.src)),
             .w => self.setOperand(.w, mov.dst, self.getOperand(.w, mov.src)),
         },
-        .movs => |size| {
-            const si: u16 = self.getReg(.w, .si);
-            const di: u16 = self.getReg(.w, .di);
-            const src_addr = self.linearAddr(.ds, si);
-            const dst_addr = self.linearAddr(.es, di);
-
-            const offset: i3 = switch (size) {
-                .b => offset: {
-                    self.writeMem(.b, dst_addr, self.readMem(.b, src_addr));
-                    break :offset if (self.flags.v.d) -1 else 1;
-                },
-                .w => offset: {
-                    self.writeMem(.w, dst_addr, self.readMem(.w, src_addr));
-                    break :offset if (self.flags.v.d) -2 else 2;
-                },
-            };
-
-            const new_si: u16 = @bitCast(@as(i16, @bitCast(si)) +% offset);
-            const new_di: u16 = @bitCast(@as(i16, @bitCast(di)) +% offset);
-
-            log.debug("si: {X:0>4} -> {X:0>4}", .{ si, new_si });
-            log.debug("di: {X:0>4} -> {X:0>4}", .{ di, new_di });
-
-            self.setReg(.w, .si, new_si);
-            self.setReg(.w, .di, new_di);
+        .movs => |size| switch (size) {
+            .b => self.storeAtDI(.b, self.loadAtSI(.b)),
+            .w => self.storeAtDI(.w, self.loadAtSI(.w)),
+        },
+        .stos => |size| switch (size) {
+            .b => self.storeAtDI(.b, self.getReg(.b, .al)),
+            .w => self.storeAtDI(.w, self.getReg(.w, .ax)),
+        },
+        .lods => |size| switch (size) {
+            .b => self.setReg(.b, .al, self.loadAtSI(.b)),
+            .w => self.setReg(.w, .ax, self.loadAtSI(.w)),
         },
         .jmp => |jmp| switch (jmp) {
+            .addr => |addr| {
+                self.ip = addr.ip;
+                self.setReg(.w, .cs, addr.cs);
+            },
             .disp => |rel| self.jmpRelative(rel),
-            .disp16 => |val| self.ip +%= val,
+            .disp16 => |disp| self.ip +%= disp,
         },
         .jc => |cond_jmp| {
             const should_jmp = switch (cond_jmp.cond) {
@@ -322,6 +376,8 @@ fn execute(self: *Self, instr: Instruction) void {
         .cld => self.flags.v.d = false,
         // set direction flag
         .std => self.flags.v.d = true,
+        // clear interrupt flag
+        .cli => self.flags.v.i = false,
         .inc => |op| self.execBinary(
             .{ .op1 = op, .op2 = .{ .imm16 = 1 } },
             alu.inc,
@@ -332,6 +388,26 @@ fn execute(self: *Self, instr: Instruction) void {
         ),
         .sahf => self.flags.setLow(self.getReg(.b, .al)),
         .lahf => self.setReg(.b, .al, self.flags.getLow()),
+        .push => |op| self.pushOperand(op),
+        .pop => |op| self.popOperand(op),
+        .call => |call| {
+            switch (call) {
+                .disp16 => |disp| {
+                    self.push(.w, self.ip);
+                    self.ip +%= disp;
+                },
+            }
+        },
+        .ret => |ret| {
+            switch (ret) {
+                .disp16 => |disp| {
+                    self.ip = self.pop(.w);
+                    const sp = self.getReg(.w, .sp);
+                    const new_sp = sp +% disp;
+                    self.setReg(.w, .sp, new_sp);
+                },
+            }
+        },
     }
 }
 
@@ -350,7 +426,9 @@ pub fn step(self: *Self) void {
 }
 
 pub fn spin(self: *Self) void {
-    while (!self.halted) {
+    while (true) {
+        while (self.halted) {}
+
         self.step();
     }
 }

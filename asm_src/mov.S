@@ -17,18 +17,20 @@ mov di, ax
 cld
 and al, 1
 
+mov bx, 0x40
+
 loop:
     mov [si], si
     movsb
 
-    cmp si, 0x40
-    jnp loop
+    cmp si, bx
+    jne loop
 
-lahf
+; lahf
 
-or al, al
+; or al, al
 
-mov al, 0b0010_1000
-sahf
+; mov al, 0b0010_1000
+; sahf
 
 hlt

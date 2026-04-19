@@ -105,8 +105,24 @@ pub fn decode(chip: *Chip) struct { u16, Instruction } {
 
             break :val .{ .and_ = .{ .op1 = ac, .op2 = data } };
         },
+        0x30...0x33 => val: {
+            const d: u1 = @truncate((opcode >> 1) & 1);
+            const w: u1 = @truncate(opcode & 1);
+
+            const op2, const op1 = decodeOperandsFromAMB(chip, fetchAMB(chip), w, d);
+            break :val .{ .xor = .{ .op1 = op1, .op2 = op2 } };
+        },
+        0x38...0x3B => val: {
+            const d: u1 = @truncate((opcode >> 1) & 1);
+            const w: u1 = @truncate(opcode & 1);
+
+            const op2, const op1 = decodeOperandsFromAMB(chip, fetchAMB(chip), w, d);
+            break :val .{ .cmp = .{ .op1 = op1, .op2 = op2 } };
+        },
         0x40...0x47 => .{ .inc = .{ .reg = .ofNumAndSize(@truncate(opcode), 1) } },
         0x48...0x4F => .{ .dec = .{ .reg = .ofNumAndSize(@truncate(opcode), 1) } },
+        0x50...0x57 => .{ .push = .{ .reg = .ofNumAndSize(@truncate(opcode), 1) } },
+        0x58...0x5F => .{ .pop = .{ .reg = .ofNumAndSize(@truncate(opcode), 1) } },
         0x70...0x7F => .{ .jc = .{ .cond = @enumFromInt(opcode & 0xF), .rel = @bitCast(chip.fetchByte()) } },
         0x80 => val: {
             const w: u1 = @truncate(opcode & 1);
@@ -137,6 +153,7 @@ pub fn decode(chip: *Chip) struct { u16, Instruction } {
             const bin: Instruction.Binary = .{ .op1 = op1, .op2 = op2 };
 
             break :val switch (amb.reg) {
+                0b000 => .{ .add = bin },
                 0b111 => .{ .cmp = bin },
                 0b101 => .{ .sub = bin },
                 else => std.debug.panic("unsupported word-sign extended operation: {b}", .{amb.reg}),
@@ -168,6 +185,10 @@ pub fn decode(chip: *Chip) struct { u16, Instruction } {
         0x9F => .lahf,
         0xA4 => .{ .movs = .b },
         0xA5 => .{ .movs = .w },
+        0xAA => .{ .stos = .b },
+        0xAB => .{ .stos = .w },
+        0xAC => .{ .lods = .b },
+        0xAD => .{ .lods = .w },
         0xB0...0xBF => val: { // MOV reg, data
             const w: u1 = @truncate((opcode >> 3) & 1);
             const rrr: u3 = @truncate(opcode & 0b111);
@@ -182,6 +203,7 @@ pub fn decode(chip: *Chip) struct { u16, Instruction } {
 
             break :val .{ .mov = .{ .src = src, .dst = dst } };
         },
+        0xC3 => .{ .ret = .{ .disp16 = chip.fetchWord() } },
         0xC6 => val: {
             const w: u1 = @truncate((opcode >> 3) & 1);
             _, const op1 = decodeOperandsFromAMB(chip, fetchAMB(chip), w, 0);
@@ -193,8 +215,15 @@ pub fn decode(chip: *Chip) struct { u16, Instruction } {
 
             break :val .{ .mov = .{ .src = op2, .dst = op1 } };
         },
+        0xE8 => .{ .call = .{ .disp16 = chip.fetchWord() } },
         0xE9 => .{ .jmp = .{ .disp16 = chip.fetchWord() } },
+        0xEA => val: {
+            const ip = chip.fetchWord();
+            const cs = chip.fetchWord();
+            break :val .{ .jmp = .{ .addr = .{ .ip = ip, .cs = cs } } };
+        },
         0xEB => .{ .jmp = .{ .disp = @bitCast(chip.fetchByte()) } },
+        0xFA => .cli,
         0xF4 => .hlt,
         0xFC => .cld,
         0xFD => .std,

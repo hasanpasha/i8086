@@ -1,20 +1,56 @@
 pub const Instruction = union(enum) {
+    hlt,
+    cld,
+    std,
+    cli,
+    sahf,
+    lahf,
     add: Binary,
     sub: Binary,
     and_: Binary,
     or_: Binary,
-    hlt,
-    jmp: Jmp,
-    jc: CondJmp,
-    mov: Mov,
-    movs: Size,
-    cld,
-    std,
+    xor: Binary,
+    cmp: Binary,
     inc: Operand,
     dec: Operand,
-    cmp: Binary,
-    sahf,
-    lahf,
+    push: Operand,
+    pop: Operand,
+    mov: Mov,
+    movs: Size,
+    stos: Size,
+    lods: Size,
+    jmp: Jmp,
+    jc: CondJmp,
+    call: Call,
+    ret: Return,
+
+    pub const Return = union(enum) {
+        disp16: u16,
+
+        pub fn format(self: @This(), writer: *Writer) Writer.Error!void {
+            switch (self) {
+                .disp16 => |disp| try writer.print("ret {}", .{disp}),
+            }
+        }
+    };
+
+    pub const Call = union(enum) {
+        // addr: Addr,
+        // mem,
+        disp16: u16,
+        // mem_reg,
+
+        pub const Addr = struct {
+            pc: u16,
+            cs: u16,
+        };
+
+        pub fn format(self: @This(), writer: *Writer) Writer.Error!void {
+            switch (self) {
+                .disp16 => |disp| try writer.print("call {}", .{disp}),
+            }
+        }
+    };
 
     pub const CondJmp = struct {
         cond: Cond,
@@ -246,11 +282,18 @@ pub const Instruction = union(enum) {
     };
 
     pub const Jmp = union(enum) {
+        addr: Addr,
         disp: i8,
         disp16: u16,
 
+        pub const Addr = struct {
+            ip: u16,
+            cs: u16,
+        };
+
         pub fn format(self: @This(), writer: *Writer) Writer.Error!void {
             switch (self) {
+                .addr => |addr| try writer.print("jmp {X:0>4}:{X:0>4}", .{ addr.cs, addr.ip }),
                 inline else => |val| try writer.print("jmp {X}", .{val}),
             }
         }
@@ -268,12 +311,12 @@ pub const Instruction = union(enum) {
     pub fn format(self: Instruction, writer: *Writer) Writer.Error!void {
         switch (self) {
             .hlt => try writer.writeAll("hlt"),
-            .add, .cmp => |bin, tag| try writer.print("{s}{f}", .{ @tagName(tag), bin }),
+            .add, .cmp, .xor => |bin, tag| try writer.print("{s}{f}", .{ @tagName(tag), bin }),
             .and_ => |bin| try writer.print("and{f}", .{bin}),
             .or_ => |bin| try writer.print("or{f}", .{bin}),
-            .movs => |size| try writer.print("movs{s}", .{@tagName(size)}),
-            .inc, .dec => |op, tag| try writer.print("{s} {f}", .{ @tagName(tag), op }),
-            .cld, .std, .lahf, .sahf => |_, tag| try writer.print("{s}", .{@tagName(tag)}),
+            .movs, .stos, .lods => |size, tag| try writer.print("{s}{s}", .{ @tagName(tag), @tagName(size) }),
+            .inc, .dec, .push, .pop => |op, tag| try writer.print("{s} {f}", .{ @tagName(tag), op }),
+            .cld, .std, .lahf, .sahf, .cli => |_, tag| try writer.print("{s}", .{@tagName(tag)}),
             inline else => |instr| try writer.print("{f}", .{instr}),
         }
     }
