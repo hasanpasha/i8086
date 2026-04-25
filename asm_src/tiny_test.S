@@ -1,6 +1,8 @@
 BITS 16
 ORG 0
 
+jmp _start
+
 section .data
 
 value dw 0x1234

@@ -1,9 +1,9 @@
 pub const std_options: std.Options = .{
     .log_level = .debug,
+    .log_scope_levels = &.{
+        .{ .scope = .bus, .level = .err },
+    },
 };
-
-var ram: RAM = undefined;
-var rom: ROM = undefined;
 
 pub fn main(init: std.process.Init) !void {
     var args = init.minimal.args.iterate();
@@ -15,20 +15,17 @@ pub fn main(init: std.process.Init) !void {
 
     log.info("emulating {s}", .{binary_path});
 
-    try rom.loadAt(init.io, binary_path);
+    var ibm_bus: IBMBus = try .init(init.io, init.gpa, binary_path);
+    defer ibm_bus.deinit();
 
-    const bus: MemoryBus = .{ .regions = &.{ ram.region(), rom.region() } };
-
-    var chip: Chip = .init(bus);
+    const chip = try CPU.init(init.gpa, ibm_bus.bus());
     chip.spin();
 }
 
 const std = @import("std");
-const log = std.log.scoped(.main);
+const log = std.log.scoped(.emulator);
+
 const I8086 = @import("I8086");
-const Chip = I8086.Chip;
-// const RAM = I8086.RAM;
-const MemoryBus = I8086.MemoryBus;
-const MemoryRegion = I8086.MemoryRegion;
-const RAM = I8086.RAM;
-const ROM = I8086.ROM;
+const CPU = I8086.CPU;
+
+const IBMBus = @import("IBMBus.zig");

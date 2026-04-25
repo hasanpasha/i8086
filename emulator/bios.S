@@ -11,9 +11,12 @@ boot_entry:
     cli
     cld
 
+
     ; set up segment registers
-    mov ax, 0x0800
+    ; mov ax, 0x0
+    mov ax, 0xB800
     mov es, ax
+    mov ds, ax
 
     xor di, di
 

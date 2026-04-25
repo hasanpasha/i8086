@@ -5,6 +5,8 @@ pub const Instruction = union(enum) {
     cli,
     sahf,
     lahf,
+    nop,
+    mov: Binary,
     add: Binary,
     sub: Binary,
     and_: Binary,
@@ -15,7 +17,6 @@ pub const Instruction = union(enum) {
     dec: Operand,
     push: Operand,
     pop: Operand,
-    mov: Mov,
     movs: Size,
     stos: Size,
     lods: Size,
@@ -243,8 +244,8 @@ pub const Instruction = union(enum) {
                         try writer.writeAll(" + ");
                 }
 
-                if (self.disp != 0)
-                    try writer.print("{X}", .{self.disp});
+                if (self.disp != 0 or (self.segment_override == null and self.base == null and self.index == null))
+                    try writer.print("{d:05}", .{self.disp});
 
                 try writer.writeAll("]");
             }
@@ -299,24 +300,15 @@ pub const Instruction = union(enum) {
         }
     };
 
-    pub const Mov = struct {
-        src: Operand,
-        dst: Operand,
-
-        pub fn format(self: @This(), writer: *Writer) Writer.Error!void {
-            try writer.print("mov{t} {f}, {f}", .{ self.dst.size(), self.dst, self.src });
-        }
-    };
-
     pub fn format(self: Instruction, writer: *Writer) Writer.Error!void {
         switch (self) {
             .hlt => try writer.writeAll("hlt"),
-            .add, .cmp, .xor => |bin, tag| try writer.print("{s}{f}", .{ @tagName(tag), bin }),
+            .mov, .add, .sub, .cmp, .xor => |bin, tag| try writer.print("{s}{f}", .{ @tagName(tag), bin }),
             .and_ => |bin| try writer.print("and{f}", .{bin}),
             .or_ => |bin| try writer.print("or{f}", .{bin}),
             .movs, .stos, .lods => |size, tag| try writer.print("{s}{s}", .{ @tagName(tag), @tagName(size) }),
             .inc, .dec, .push, .pop => |op, tag| try writer.print("{s} {f}", .{ @tagName(tag), op }),
-            .cld, .std, .lahf, .sahf, .cli => |_, tag| try writer.print("{s}", .{@tagName(tag)}),
+            .cld, .std, .lahf, .sahf, .cli, .nop => |_, tag| try writer.print("{s}", .{@tagName(tag)}),
             inline else => |instr| try writer.print("{f}", .{instr}),
         }
     }

@@ -6,18 +6,11 @@ ip: u16,
 /// flags register
 flags: Flags,
 
-bus: MemoryBus,
+decoder: Decoder,
+
+bus: Bus,
 
 halted: bool = false,
-
-// /// user function to read from port
-// port_in_fn: *const fn (ctx: ?*anyopaque, port: u8) u8,
-
-// /// user function to write to port
-// port_out_fn: *const fn (ctx: ?*anyopaque, port: u8, value: u8) void,
-
-// /// user custom data pointer
-// userdata: ?*anyopaque,
 
 pub const Flags = packed union(u16) {
     raw: u16,
@@ -98,12 +91,19 @@ pub const Flags = packed union(u16) {
     }
 };
 
-const Self = @This();
+fn fetchCB(ctx: ?*anyopaque) ?u8 {
+    const cpu: *Self = @ptrCast(@alignCast(ctx));
 
-pub fn init(bus: MemoryBus) Self {
-    var self: Self = undefined;
+    const byte = cpu.bus.read(.b, cpu.linearAddr(.cs, cpu.ip));
+    cpu.ip +%= 1;
+    return byte;
+}
+
+pub fn init(alloc: std.mem.Allocator, bus: Bus) !*Self {
+    var self = try alloc.create(Self);
 
     self.bus = bus;
+    self.decoder = .{ .fetcher = .{ .ctx = self, .fetch_fn = &fetchCB } };
 
     self.reset();
 
@@ -173,37 +173,16 @@ fn linearAddr(self: *const Self, seg: Register, effective_addr: u16) u20 {
 }
 
 pub fn readMem(self: *const Self, comptime size: Size, addr: u20) size.T() {
-    const val: size.T() = switch (size) {
-        .b => self.bus.read(addr),
-        .w => val: {
-            const lo = self.bus.read(addr);
-            const hi = self.bus.read(addr +% 1);
-            break :val @as(u16, hi) << 8 | lo;
-        },
-    };
+    const data = self.bus.read(size, addr);
+    log.debug("[{X:0>5}] -> {X:0>" ++ (if (size == .b) "2" else "4") ++ "}", .{ addr, data });
 
-    log.debug("[{X:0>5}] -> {X:0>" ++ (if (size == .b) "2" else "4") ++ "}", .{ addr, val });
-    return val;
+    return data;
 }
 
-pub fn writeMem(self: *Self, comptime size: Size, addr: u20, val: size.T()) void {
-    log.debug("[{X:0>5}] <- {X:0>" ++ (if (size == .b) "2" else "4") ++ "}", .{ addr, val });
+pub fn writeMem(self: *Self, comptime size: Size, addr: u20, data: size.T()) void {
+    log.debug("[{X:0>5}] <- {X:0>" ++ (if (size == .b) "2" else "4") ++ "}", .{ addr, data });
 
-    self.bus.write(addr, @truncate(val));
-    if (size == .w)
-        self.bus.write(addr +% 1, @truncate(val >> 8));
-}
-
-pub fn fetchByte(self: *Self) u8 {
-    const byte = self.readMem(.b, self.linearAddr(.cs, self.ip));
-    self.ip +%= 1;
-    return byte;
-}
-
-pub fn fetchWord(self: *Self) u16 {
-    const lo = self.fetchByte();
-    const hi = self.fetchByte();
-    return @as(u16, hi) << 8 | lo;
+    self.bus.write(size, addr, data);
 }
 
 fn getAddrOfMemoryOperand(self: *const Self, mem: Operand.Memory) u20 {
@@ -318,17 +297,20 @@ fn storeAtDI(self: *Self, comptime size: Size, value: size.T()) void {
 }
 
 fn execute(self: *Self, instr: Instruction) void {
+    std.log.info("{f}", .{instr});
+
     switch (instr) {
         .hlt => self.halted = true,
+        .nop => {},
         .add => |bin| self.execBinary(bin, alu.add),
         .sub => |bin| self.execBinary(bin, alu.sub),
         .and_ => |bin| self.execBinary(bin, alu.anD),
         .or_ => |bin| self.execBinary(bin, alu.oR),
         .xor => |bin| self.execBinary(bin, alu.xor),
         .cmp => |bin| self.execBinary(bin, alu.cmp),
-        .mov => |mov| switch (mov.dst.size()) {
-            .b => self.setOperand(.b, mov.dst, self.getOperand(.b, mov.src)),
-            .w => self.setOperand(.w, mov.dst, self.getOperand(.w, mov.src)),
+        .mov => |mov| switch (mov.size()) {
+            .b => self.setOperand(.b, mov.op1, self.getOperand(.b, mov.op2)),
+            .w => self.setOperand(.w, mov.op1, self.getOperand(.w, mov.op2)),
         },
         .movs => |size| switch (size) {
             .b => self.storeAtDI(.b, self.loadAtSI(.b)),
@@ -412,16 +394,11 @@ fn execute(self: *Self, instr: Instruction) void {
 }
 
 pub fn fetchInstr(self: *Self) Instruction {
-    const size, const instr = decoder.decode(self);
-    self.ip +%= size;
-
-    return instr;
+    return self.decoder.decode() catch unreachable orelse unreachable;
 }
 
 pub fn step(self: *Self) void {
     const instr = self.fetchInstr();
-    log.info("{f}", .{instr});
-
     self.execute(instr);
 }
 
@@ -433,18 +410,18 @@ pub fn spin(self: *Self) void {
     }
 }
 
-const log = std.log.scoped(.chip);
+const Self = @This();
 
 const std = @import("std");
+const log = std.log.scoped(.cpu);
 const Writer = std.Io.Writer;
 
-const root = @import("root.zig");
+const alu = @import("alu.zig");
 
-const MemoryBus = root.MemoryBus;
+const Bus = @import("Bus.zig");
 
-const decoder = root.decoder;
-const alu = root.alu;
-const Instruction = root.Instruction;
+const Decoder = @import("Decoder.zig");
+const Instruction = @import("instruction.zig").Instruction;
 const Operand = Instruction.Operand;
 const Register = Instruction.Register;
-const Size = root.Size;
+const Size = @import("size.zig").Size;
